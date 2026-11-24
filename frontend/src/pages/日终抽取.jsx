@@ -22,7 +22,7 @@ export default function 日终抽取() {
           onClick={() =>
             api
               .抽取(日)
-              .then((r) => set讯(`批次 ${r.批次编号} 写入=${r.写入} 盖写=${r.盖写} 断档=${r.断档}`))
+              .then((r) => set讯(`批次 ${r.批次编号} 写入=${r.写入} 追加版本=${r.追加版本 ?? r.盖写} 迟到纠偏=${r.迟到纠偏 ?? 0} 断档=${r.断档}`))
               .then(刷新)
               .catch((e) => set讯(String(e.message || e)))
           }

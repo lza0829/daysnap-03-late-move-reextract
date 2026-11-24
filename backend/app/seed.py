@@ -30,15 +30,40 @@ CREATE TABLE IF NOT EXISTS 抽取批次 (
   时刻 TEXT NOT NULL,
   报告 TEXT NOT NULL DEFAULT '{}'
 );
+-- 基镜+纠偏版本链：基线行（版本号=1）永不改；迟到补抽只追加新版本并翻转是否当前。
+-- 禁止无版本链却直接 UPDATE 基行。
 CREATE TABLE IF NOT EXISTS 周期快照 (
   快照键 TEXT PRIMARY KEY,
   账户键 TEXT NOT NULL,
   营业日 TEXT NOT NULL,
+  版本号 INTEGER NOT NULL DEFAULT 1,
   余额 INTEGER NOT NULL,
   抽取批次编号 TEXT NOT NULL,
   来源 TEXT NOT NULL DEFAULT '日终抽取',
   状态 TEXT NOT NULL DEFAULT '有效',
-  UNIQUE(账户键, 营业日)
+  是否当前 INTEGER NOT NULL DEFAULT 1,
+  前序快照键 TEXT NOT NULL DEFAULT '',
+  UNIQUE(账户键, 营业日, 版本号)
+);
+-- 迟到处置实体：每笔迟到流水一条，贯穿 待处置→已纠偏，禁止只触发重算无证据。
+CREATE TABLE IF NOT EXISTS 迟到处置单 (
+  编号 INTEGER PRIMARY KEY AUTOINCREMENT,
+  流水号 TEXT NOT NULL UNIQUE,
+  账户键 TEXT NOT NULL,
+  营业日 TEXT NOT NULL,
+  装载批次编号 TEXT NOT NULL DEFAULT '',
+  状态 TEXT NOT NULL DEFAULT '待处置',
+  基线快照键 TEXT NOT NULL DEFAULT '',
+  基线余额 INTEGER,
+  前余额 INTEGER,
+  后余额 INTEGER,
+  纠偏快照键 TEXT NOT NULL DEFAULT '',
+  纠偏批次编号 TEXT NOT NULL DEFAULT '',
+  版本号 INTEGER,
+  级联 INTEGER NOT NULL DEFAULT 0,
+  valid INTEGER NOT NULL DEFAULT 1,
+  时刻 TEXT NOT NULL,
+  处置时刻 TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS 回放批次 (
   编号 TEXT PRIMARY KEY,
@@ -94,7 +119,6 @@ CREATE TABLE IF NOT EXISTS 装载批次 (
 空桩模块 = [
     "开户首日无前日",
     "同日重复抽取幂等",
-    "流水迟到补抽",
     "销户终镜",
     "负余额闸",
     "币种隔离",
@@ -121,9 +145,53 @@ def 此刻() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _迁移版本链快照(conn) -> None:
+    """旧库（每账日唯一行）迁移为版本链：既有有效行即 v1 基线且当前。"""
+    表 = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='周期快照'"
+    ).fetchone()
+    if 表 is None:
+        return
+    列 = {r["name"] for r in conn.execute("PRAGMA table_info(周期快照)")}
+    if "版本号" in 列:
+        return
+    conn.execute("ALTER TABLE 周期快照 RENAME TO 周期快照_旧版")
+    conn.execute(
+        """
+CREATE TABLE 周期快照 (
+  快照键 TEXT PRIMARY KEY,
+  账户键 TEXT NOT NULL,
+  营业日 TEXT NOT NULL,
+  版本号 INTEGER NOT NULL DEFAULT 1,
+  余额 INTEGER NOT NULL,
+  抽取批次编号 TEXT NOT NULL,
+  来源 TEXT NOT NULL DEFAULT '日终抽取',
+  状态 TEXT NOT NULL DEFAULT '有效',
+  是否当前 INTEGER NOT NULL DEFAULT 1,
+  前序快照键 TEXT NOT NULL DEFAULT '',
+  UNIQUE(账户键, 营业日, 版本号)
+)
+"""
+    )
+    conn.execute(
+        """
+INSERT INTO 周期快照(
+  快照键, 账户键, 营业日, 版本号, 余额, 抽取批次编号, 来源, 状态, 是否当前, 前序快照键
+)
+SELECT 快照键, 账户键, 营业日, 1, 余额, 抽取批次编号, 来源, 状态, 1, ''
+FROM 周期快照_旧版
+"""
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS 快照当前镜 ON 周期快照(账户键, 营业日, 是否当前)")
+
+
 def 初始化库() -> None:
     conn = 连接()
     conn.executescript(建表)
+    _迁移版本链快照(conn)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS 快照当前镜 ON 周期快照(账户键, 营业日, 是否当前)"
+    )
     if conn.execute("SELECT COUNT(*) AS c FROM 台参").fetchone()["c"] == 0:
         for k, v in {
             "站名": "日镜账",

@@ -52,6 +52,8 @@ export default function 变动流水() {
               <th>变动额</th>
               <th>摘要</th>
               <th>命运</th>
+              <th>迟到处置</th>
+              <th>valid</th>
             </tr>
           </thead>
           <tbody>
@@ -63,6 +65,16 @@ export default function 变动流水() {
                 <td>{r.变动额}</td>
                 <td>{r.摘要}</td>
                 <td>{r.命运}</td>
+                <td>
+                  {r.迟到状态 ? (
+                    <span className={`徽章 ${r.迟到状态 === "已纠偏" ? "通" : "败"}`}>
+                      {r.迟到状态}#{r.迟到处置编号}
+                    </span>
+                  ) : (
+                    "—"
+                  )}
+                </td>
+                <td>{r.迟到valid ?? "—"}</td>
               </tr>
             ))}
           </tbody>

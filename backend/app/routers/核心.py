@@ -1,11 +1,17 @@
 import json
+import sqlite3
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.db import 夹具目录, 连接
-from app.services import 回放, 抽取, 目录, 装载
+from app.services import 回放, 抽取, 目录, 装载, 迟到补抽
 
 路由 = APIRouter(prefix="/api")
+
+
+def _并发转409(e: sqlite3.OperationalError) -> HTTPException:
+    return HTTPException(409, f"装载/抽取交叉冲突，事务已回滚（失败闭）：{e}")
 
 
 class 装载请求(BaseModel):
@@ -54,34 +60,64 @@ def 列账户():
 def 列流水(营业日: str = "", 账户键: str = ""):
     conn = 连接()
     try:
-        sql = "SELECT * FROM 变动流水 WHERE 1=1"
+        sql = (
+            "SELECT 流.*, 迟.状态 AS 迟到状态, 迟.编号 AS 迟到处置编号, 迟.valid AS 迟到valid "
+            "FROM 变动流水 流 "
+            "LEFT JOIN 迟到处置单 迟 ON 迟.流水号 = 流.流水号 WHERE 1=1"
+        )
         args: list = []
         if 营业日:
-            sql += " AND 营业日=?"
+            sql += " AND 流.营业日=?"
             args.append(营业日)
         if 账户键:
-            sql += " AND 账户键=?"
+            sql += " AND 流.账户键=?"
             args.append(账户键)
-        sql += " ORDER BY 营业日 DESC, 发生时 DESC LIMIT 300"
+        sql += " ORDER BY 流.营业日 DESC, 流.发生时 DESC LIMIT 300"
         return [dict(r) for r in conn.execute(sql, args)]
     finally:
         conn.close()
 
 
 @路由.get("/快照")
-def 列快照(营业日: str = "", 账户键: str = ""):
+def 列快照(营业日: str = "", 账户键: str = "", 含历史: bool = False):
+    """默认只列当前版本镜；含历史=true 返回完整纠偏版本链。"""
     conn = 连接()
     try:
         sql = "SELECT * FROM 周期快照 WHERE 状态='有效'"
         args: list = []
+        if not 含历史:
+            sql += " AND 是否当前=1"
         if 营业日:
             sql += " AND 营业日=?"
             args.append(营业日)
         if 账户键:
             sql += " AND 账户键=?"
             args.append(账户键)
-        sql += " ORDER BY 营业日 DESC, 账户键 LIMIT 300"
+        sql += " ORDER BY 营业日 DESC, 账户键, 版本号 LIMIT 500"
         return [dict(r) for r in conn.execute(sql, args)]
+    finally:
+        conn.close()
+
+
+@路由.get("/迟到处置")
+def 列迟到处置(营业日: str = "", 账户键: str = "", 状态: str = ""):
+    """迟到处置实体只读接口：每笔迟到一条，含 valid 与处置状态证据。"""
+    conn = 连接()
+    try:
+        return 迟到补抽.列处置单(conn, 营业日, 账户键, 状态)
+    finally:
+        conn.close()
+
+
+@路由.get("/迟到处置/镜")
+def 读迟到镜(账户键: str, 营业日: str, 视角: str = "当前"):
+    """迟到处置只读接口：视角=基线（基镜旧余额）/当前（现行余额）/链（纠偏版本链）。"""
+    conn = 连接()
+    try:
+        try:
+            return 迟到补抽.读镜(conn, 账户键, 营业日, 视角)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
     finally:
         conn.close()
 
@@ -171,6 +207,9 @@ def 列夹具():
 def 执行装载(体: 装载请求):
     try:
         return 装载.装载流水(体.流水, 体.批次编号)
+    except 迟到补抽.并发冲突 as e:
+        # 装载/抽取交叉失败闭：事务已回滚，无半写流水、无孤证
+        raise HTTPException(409, str(e)) from e
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 
@@ -195,13 +234,20 @@ def _装载夹具文件(名: str):
         raise HTTPException(404, f"夹具不存在: {名}")
     data = json.loads(path.read_text(encoding="utf-8"))
     流水 = data.get("流水") or data.get("事件") or []
-    return 装载.装载流水(流水, str(data.get("批次编号") or ""))
+    try:
+        return 装载.装载流水(流水, str(data.get("批次编号") or ""))
+    except 迟到补抽.并发冲突 as e:
+        raise HTTPException(409, str(e)) from e
 
 
 @路由.post("/抽取")
 def 执行抽取(体: 营业日请求):
     try:
         return 抽取.日终抽取(体.营业日, 体.批次编号)
+    except sqlite3.OperationalError as e:
+        if "locked" in str(e).lower():
+            raise _并发转409(e) from e
+        raise
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 
@@ -210,6 +256,10 @@ def 执行抽取(体: 营业日请求):
 def 执行回放(体: 营业日请求):
     try:
         return 回放.回放核对(体.营业日, 体.批次编号)
+    except sqlite3.OperationalError as e:
+        if "locked" in str(e).lower():
+            raise _并发转409(e) from e
+        raise
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 
@@ -229,6 +279,7 @@ def 重置():
             "跳变记录",
             "旁置簿",
             "装载批次",
+            "迟到处置单",
         ):
             conn.execute(f"DELETE FROM {t}")
         conn.commit()

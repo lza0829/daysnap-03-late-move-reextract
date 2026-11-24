@@ -47,7 +47,9 @@ export default function 台面() {
       <div className="阶条">
         <div className="阶"><div className="序">账户</div><b>{o.账户数 ?? "—"}</b><span>册内户数</span></div>
         <div className="阶"><div className="序">流水</div><b>{o.流水数 ?? "—"}</b><span>已入账</span></div>
-        <div className="阶"><div className="序">快照</div><b>{o.快照数 ?? "—"}</b><span>有效行</span></div>
+        <div className="阶"><div className="序">快照</div><b>{o.快照数 ?? "—"}</b><span>当前镜/版本{o.快照版本数 ?? "—"}</span></div>
+        <div className="阶"><div className="序">待处置</div><b>{o.迟到待处置 ?? "—"}</b><span>迟到未纠偏</span></div>
+        <div className="阶"><div className="序">已纠偏</div><b>{o.迟到已纠偏 ?? "—"}</b><span>版本链证据</span></div>
         <div className="阶"><div className="序">差额</div><b>{o.差额行数 ?? "—"}</b><span>清单行</span></div>
         <div className="阶"><div className="序">旁置</div><b>{o.旁置数 ?? "—"}</b><span>未入账</span></div>
       </div>

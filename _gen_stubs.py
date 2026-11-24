@@ -2,10 +2,10 @@
 from pathlib import Path
 
 root = Path(__file__).resolve().parent / "backend" / "app" / "modules"
+# 注意：流水迟到补抽 已落地为真实模块（services/迟到补抽.py + modules 门面），禁止再生成空桩覆盖
 mods = [
     "开户首日无前日",
     "同日重复抽取幂等",
-    "流水迟到补抽",
     "销户终镜",
     "负余额闸",
     "币种隔离",

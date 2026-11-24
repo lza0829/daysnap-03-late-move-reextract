@@ -10,7 +10,10 @@ def 总览() -> dict:
         return {
             "账户数": 数("SELECT COUNT(*) FROM 账户"),
             "流水数": 数("SELECT COUNT(*) FROM 变动流水 WHERE 命运='已入账'"),
-            "快照数": 数("SELECT COUNT(*) FROM 周期快照 WHERE 状态='有效'"),
+            "快照数": 数("SELECT COUNT(*) FROM 周期快照 WHERE 状态='有效' AND 是否当前=1"),
+            "快照版本数": 数("SELECT COUNT(*) FROM 周期快照 WHERE 状态='有效'"),
+            "迟到待处置": 数("SELECT COUNT(*) FROM 迟到处置单 WHERE 状态='待处置' AND valid=1"),
+            "迟到已纠偏": 数("SELECT COUNT(*) FROM 迟到处置单 WHERE 状态='已纠偏' AND valid=1"),
             "差额行数": 数("SELECT COUNT(*) FROM 差额行"),
             "断档数": 数("SELECT COUNT(*) FROM 断档记录"),
             "跳变数": 数("SELECT COUNT(*) FROM 跳变记录"),
